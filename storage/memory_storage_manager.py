@@ -7,23 +7,21 @@ import uuid
 import asyncio
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, TYPE_CHECKING
 from enum import Enum
 
 from timem.models.memory import Memory, convert_dict_to_memory
 from timem.utils.logging import get_logger
 from timem.utils.config_manager import get_storage_config
 
-# Support execution state
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from timem.core.execution_state import ExecutionState
+    from storage.graph_adapter import GraphAdapter
+    from storage.cache_adapter import CacheAdapter
 
 # Import unified interface and adapter implementations
 from storage.postgres_adapter import PostgreSQLAdapter
 from storage.vector_adapter import VectorAdapter
-from storage.graph_adapter import GraphAdapter
-from storage.cache_adapter import CacheAdapter
 from storage.storage_adapter import StorageAdapter
 from timem.utils.config_manager import ConfigManager
 
@@ -35,8 +33,8 @@ class MemoryStorageManager:
         self,
         postgres_adapter: Optional[PostgreSQLAdapter] = None,
         vector_adapter: Optional[VectorAdapter] = None,
-        graph_adapter: Optional[GraphAdapter] = None,
-        cache_adapter: Optional[CacheAdapter] = None,
+        graph_adapter: Optional["GraphAdapter"] = None,
+        cache_adapter: Optional["CacheAdapter"] = None,
         config_manager: Optional[ConfigManager] = None,
     ):
         """

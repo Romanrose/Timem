@@ -493,7 +493,7 @@ class LocomoParser:
         """Generate data/locomo_experiment_metadata.json matching the required schema."""
 
         try:
-            project_root = Path(__file__).parent.parent.parent
+            project_root = Path(__file__).resolve().parents[3]
             out_path = project_root / "data" / "locomo_experiment_metadata.json"
 
             conversations_meta: Dict[str, Any] = {}

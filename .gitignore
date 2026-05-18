@@ -93,6 +93,5 @@ credentials/
 # 本地模型文件（大文件，不应上传到仓库）
 models/
 D:/LLM/
-D:\LLM\
 *.bin
 *.safetensors

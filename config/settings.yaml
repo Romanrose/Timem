@@ -99,7 +99,7 @@ llm:
         requests_per_minute: 20000
       max_retries: 3
       max_tokens: 2048
-      model: gpt-4o-mini
+      model: ${OPENAI_MODEL:gpt-4o-mini}
       temperature: 0.7
       test_api_key_1: ${OPENAI_API_KEY:}
       timeout: 90
