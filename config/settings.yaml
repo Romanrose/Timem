@@ -9,22 +9,23 @@ app:
   reload_options:
     delay: 0.25
     dirs:
-    - app
-    - timem
+      - app
+      - timem
     excludes:
-    - logs/*
-    - backups/*
-    - data/*
+      - logs/*
+      - backups/*
+      - data/*
   version: 1.0.0
   workers: 1
 llm:
-  default_provider: openai
+  default_provider: mimo
   dialogue_system:
     max_retries: 2
     max_tokens: 1024
     model: glm-4-flash
     provider: zhipuai
-    system_prompt_template: 'You are playing the role of {expert_name}, you are a
+    system_prompt_template:
+      'You are playing the role of {expert_name}, you are a
       {expert_role}.
 
 
@@ -83,6 +84,27 @@ llm:
       max_tokens: 2048
       model: mock-llm
       temperature: 0.7
+    mimo:
+      api_key: ${MIMO_API_KEY:}
+      base_url: ${MIMO_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+      concurrency:
+        api_key_rotation: true
+        async_retry_count: 20
+        async_retry_delay: 1.0
+        async_timeout: 30.0
+        batch_delay: 0.1
+        enable_async_timeout: true
+        enable_multi_api_keys: true
+        enable_rate_limit: false
+      max_concurrent_requests: 20
+      requests_per_minute: 20000
+      max_retries: 3
+      max_tokens: 2048
+      model: ${MIMO_MODEL:mimo-v2-omni}
+      temperature: 0.7
+      test_api_key_1: ${MIMO_API_KEY:}
+      test_api_key_number: 0
+      timeout: 90
     openai:
       api_key: ${OPENAI_API_KEY:}
       base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
@@ -99,7 +121,7 @@ llm:
         requests_per_minute: 20000
       max_retries: 3
       max_tokens: 2048
-      model: ${OPENAI_MODEL:gpt-4o-mini}
+      model: ${OPENAI_MODEL:mimo-v2-omni}
       temperature: 0.7
       test_api_key_1: ${OPENAI_API_KEY:}
       timeout: 90
@@ -167,15 +189,15 @@ llm:
     connection_warmer:
       enabled: true
       providers:
-      - zhipuai
-      - openai
+        - zhipuai
+        - openai
       warm_on_startup: true
     dns_cache:
       enabled: true
       pre_resolve:
-      - open.bigmodel.cn
-      - api.openai.com
-      - turingai.plus
+        - open.bigmodel.cn
+        - api.openai.com
+        - turingai.plus
       ttl: 300
     fallback:
       enabled: false
@@ -222,10 +244,10 @@ llm:
       requests_per_minute: 20000
     max_retries: 3
     max_tokens: 2048
-    model: gpt-4o-mini
-    provider: openai
+    model: mimo-v2-omni
+    provider: mimo
     temperature: 0.7
-    test_api_key_1: ${OPENAI_API_KEY:}
+    test_api_key_1: ${MIMO_API_KEY:}
     test_api_key_number: 0
     timeout: 90
   timeout: 90
@@ -237,8 +259,9 @@ logging:
   file_path: logs/timem.log
   file_retention: 7 days
   file_rotation: 10 MB
-  format: '{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line}
-    - {message}'
+  format:
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line}
+    - {message}"
   level: ${LOG_LEVEL:INFO}
 memory:
   historical_memory_limit: 3
@@ -295,10 +318,10 @@ memory_generation:
     batch_size: 10
     enabled: true
     layers:
-    - L2
-    - L3
-    - L4
-    - L5
+      - L2
+      - L3
+      - L4
+      - L5
     lookback_days: 30
     parallel_tasks: 3
     schedule: 0 2 * * *
@@ -362,11 +385,11 @@ services:
   cors:
     allow_credentials: true
     allow_headers:
-    - '*'
+      - "*"
     allow_methods:
-    - '*'
+      - "*"
     allow_origins:
-    - '*'
+      - "*"
   mcp:
     host: 127.0.0.1
     port: 8070
@@ -388,7 +411,7 @@ storage:
     db: 0
     host: localhost
     max_connections: 100
-    password: ''
+    password: ""
     port: 16379
     provider: redis
     retry_count: 3
@@ -424,14 +447,14 @@ storage:
       user: ${POSTGRES_USER:}
     provider: postgres
   vector:
-    api_key: ''
+    api_key: ""
     collection_name: timem_memories
     distance: Cosine
     provider: qdrant
     retry_count: 3
     timeout: 30
     url: http://localhost:16333
-    vector_size: 2048
+    vector_size: 1024
 workflows:
   layer_update:
     cascade_enabled: true
@@ -475,7 +498,7 @@ workflows:
   quality_assessment:
     enabled: true
     metrics:
-    - completeness
-    - consistency
-    - relevance
+      - completeness
+      - consistency
+      - relevance
     threshold: 0.8

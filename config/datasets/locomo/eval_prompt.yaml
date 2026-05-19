@@ -9,13 +9,13 @@
 # LLM Evaluation Model Configuration
 # LLM model used for Locomo evaluation
 eval_llm_config:
-  provider: "openai"  # LLM provider
-  model: "gpt-4o-mini"  # Using gpt-4o-mini for evaluation
+  provider: "mimo"  # LLM provider
+  model: "mimo-v2-omni"  # Using mimo-v2-omni for evaluation
   temperature: 0.7    # Evaluation temperature set to 0.7
   max_tokens: 10      # Evaluation only needs simple yes/no response
   
 # Backward compatibility fields
-eval_model: "gpt-4o-mini"  # For backward compatibility with legacy code
+eval_model: "mimo-v2-omni"  # For backward compatibility with legacy code
 
 # Question-answering evaluation prompt
 qa_evaluation_prompt: |
