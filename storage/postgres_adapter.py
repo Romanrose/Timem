@@ -5,7 +5,7 @@ Implements StorageAdapter interface, provides PostgreSQL-specific storage and fu
 
 import asyncio
 from typing import Dict, List, Optional, Any, Union
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import text
 from timem.models.memory import Memory, convert_dict_to_memory, FragmentMemory
@@ -116,7 +116,7 @@ class PostgreSQLAdapter(StorageAdapter):
                 return {"status": "no_status_method", "error": "PostgreSQLStore has no get_connection_pool_status method"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
-    
+
     async def cleanup_connection_pool(self) -> bool:
         """Clean up connection pool"""
         try:
@@ -135,6 +135,35 @@ class PostgreSQLAdapter(StorageAdapter):
             self._postgres_store = await get_postgres_store()
         return self._postgres_store
 
+    def _coerce_datetime_for_db(self, value: Any) -> Optional[datetime]:
+        """Convert loose timestamp values to timezone-naive datetime for PostgreSQL."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None) if value.tzinfo else value
+
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if not raw_value:
+                return None
+
+            try:
+                parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+                return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+            except ValueError:
+                try:
+                    return datetime.strptime(raw_value, "%Y-%m-%d")
+                except ValueError:
+                    logger.warning(f"Failed to parse datetime value for PostgreSQL: {value}")
+                    return None
+
+        logger.warning(f"Unsupported datetime value type for PostgreSQL: {type(value)}")
+        return None
+
     def _memory_to_db_record(self, memory: Memory) -> Dict[str, Any]:
         """Convert Memory object to PostgreSQL storage record"""
         logger.info(f"Converting memory object: id={memory.id}, level={memory.level}")
@@ -150,6 +179,24 @@ class PostgreSQLAdapter(StorageAdapter):
         if isinstance(memory, FragmentMemory):
             db_record['dialogue_turns_json'] = db_record.pop('dialogue_turns', None)
         
+        # PostgreSQL DateTime columns need native datetime objects, not ISO strings.
+        time_fields = ['created_at', 'updated_at', 'time_window_start', 'time_window_end']
+        for field in time_fields:
+            if field in db_record:
+                db_record[field] = self._coerce_datetime_for_db(db_record[field])
+
+        created_at = db_record.get('created_at') or datetime.now()
+        updated_at = db_record.get('updated_at') or created_at
+        db_record['created_at'] = created_at
+        db_record['updated_at'] = updated_at
+
+        # core_memories requires a non-null time window. Some L1 memories only
+        # carry created_at, so use that instant as the narrowest valid window.
+        if db_record.get('time_window_start') is None:
+            db_record['time_window_start'] = created_at
+        if db_record.get('time_window_end') is None:
+            db_record['time_window_end'] = db_record['time_window_start'] or updated_at
+
         logger.info(f"Converted time window: {db_record.get('time_window_start')} to {db_record.get('time_window_end')}")
         logger.debug(f"Converted Memory (ID: {memory.id}) to PostgreSQL record.")
         

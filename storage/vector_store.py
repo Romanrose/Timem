@@ -395,17 +395,31 @@ class VectorStore:
                 query_filter = self._build_filter(filter_conditions)
                 self.logger.info(f"Built query filter: {query_filter}")
             
-            # Execute search
-            search_results = await asyncio.to_thread(
-                self.client.search,
-                collection_name=collection_name,
-                query_vector=query_vector,
-                limit=limit,
-                score_threshold=score_threshold,
-                query_filter=query_filter,
-                with_payload=True,
-                with_vectors=True  # Add this parameter to get vector data
-            )
+            # Execute search with qdrant-client compatibility.
+            # Newer clients expose `query_points`; older ones expose `search`.
+            if hasattr(self.client, "query_points"):
+                query_response = await asyncio.to_thread(
+                    self.client.query_points,
+                    collection_name=collection_name,
+                    query=query_vector,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    query_filter=query_filter,
+                    with_payload=True,
+                    with_vectors=True
+                )
+                search_results = query_response.points
+            else:
+                search_results = await asyncio.to_thread(
+                    self.client.search,
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    query_filter=query_filter,
+                    with_payload=True,
+                    with_vectors=True  # Add this parameter to get vector data
+                )
             
             # Convert results
             results = []

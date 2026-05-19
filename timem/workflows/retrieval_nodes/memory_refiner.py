@@ -15,6 +15,7 @@ from llm.llm_manager import get_llm
 from llm.base_llm import MessageRole, ModelConfig
 from llm.zhipuai_adapter import ZhipuAIAdapter
 from llm.openai_adapter import OpenAIAdapter
+from llm.mimo_adapter import MimoAdapter
 
 from timem.utils.prompt_manager import get_prompt_manager
 from timem.utils.logging import get_logger
@@ -70,7 +71,7 @@ class MemoryRefiner:
                 return get_llm(llm_provider)
 
             provider = llm_provider or self.refiner_config.get("llm_provider", "openai")
-            model = self.refiner_config.get("llm_model", "gpt-4o-mini")
+            model = self.refiner_config.get("llm_model", "mimo-v2-omni")
             temperature = self.refiner_config.get("temperature", 0.3)
             max_tokens = self.refiner_config.get("max_tokens", 1024)
 
@@ -88,6 +89,11 @@ class MemoryRefiner:
                     self.logger.info(f"Creating OpenAI adapter: {model}, temperature={temperature}")
                 return OpenAIAdapter(model_config)
 
+            if provider == "mimo":
+                if self.debug_mode:
+                    self.logger.info(f"Creating Mimo adapter: {model}, temperature={temperature}")
+                return MimoAdapter(model_config)
+
             self.logger.warning(f"Unknown LLM provider: {provider}, using default configuration")
             return get_llm(llm_provider)
 
@@ -97,7 +103,7 @@ class MemoryRefiner:
 
     def _validate_prompt_templates(self):
         """Validate that required prompt templates exist."""
-        template_name = "memory_refiner"
+        template_name = "memory_refiner_simple"
         try:
             prompt_template = self.prompt_manager.get_prompt(template_name)
             if not prompt_template:
@@ -337,18 +343,18 @@ class MemoryRefiner:
     def _get_prompt_template_by_complexity(self, complexity: int) -> str:
         strategy_aware = self.refiner_config.get("strategy_aware", False)
         if not strategy_aware:
-            return "memory_refiner"
+            return "memory_refiner_simple"
 
         prompt_templates = self.refiner_config.get("prompt_templates", {})
         template_name = prompt_templates.get(f"complexity_{complexity}")
         if not template_name:
             self.logger.warning(f"No template configuration found for complexity {complexity}, using default template")
-            return "memory_refiner"
+            return "memory_refiner_simple"
 
         prompt_template = self.prompt_manager.get_prompt(template_name)
         if not prompt_template:
             self.logger.warning(f"Template {template_name} does not exist, falling back to default template")
-            return "memory_refiner"
+            return "memory_refiner_simple"
 
         self.logger.info(f"Using template for complexity {complexity}: {template_name}")
         return template_name
@@ -376,6 +382,12 @@ class MemoryRefiner:
                 total_count=len(numbered_memories),
                 numbered_memories=numbered_memories_text,
             )
+            formatted_prompt += (
+                "\n\nImportant output rule:\n"
+                "Return ONLY a single JSON object on the final line.\n"
+                "Do not include explanation, reasoning, markdown, or code fences.\n"
+                "Output format: {\"relevant_ids\": [1, 2, 3]}\n"
+            )
 
         except Exception as e:
             self.logger.error(f"Failed to build prompt: {e}, using default prompt")
@@ -385,6 +397,10 @@ Question: {question}
 
 Memory list:
 {numbered_memories_text}
+
+Important output rule:
+Return ONLY a single JSON object.
+Do not include explanation, reasoning, markdown, or code fences.
 
 Output format: {{\"relevant_ids\": [array of IDs]}}"""
 
@@ -436,6 +452,21 @@ Output format: {{\"relevant_ids\": [array of IDs]}}"""
                 return json.loads(json_match.group(0))
             except json.JSONDecodeError:
                 pass
+
+        relevant_ids_match = re.search(
+            r'"relevant_ids"\s*:\s*\[(.*?)\]',
+            response,
+            re.DOTALL,
+        )
+        if relevant_ids_match:
+            raw_ids = relevant_ids_match.group(1)
+            ids = [int(match) for match in re.findall(r"\d+", raw_ids)]
+            return {"relevant_ids": ids}
+
+        bracket_list_match = re.search(r"\[(\s*\d+(?:\s*,\s*\d+)*)\s*\]", response)
+        if bracket_list_match:
+            ids = [int(match) for match in re.findall(r"\d+", bracket_list_match.group(1))]
+            return {"relevant_ids": ids}
 
         raise json.JSONDecodeError(f"Unable to extract JSON from response: {response[:200]}", response, 0)
 

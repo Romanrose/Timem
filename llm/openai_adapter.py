@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Optional, Any, AsyncIterator
 import json
 import aiohttp
+import os
 
 # Import httpx for legacy methods (backward compatibility)
 try:
@@ -59,6 +60,9 @@ class OpenAIAdapter(BaseLLM):
         self.timeout = openai_config.get("timeout", 60)
         self.model_type = ModelType.CHAT
         self.logger = get_logger(__name__)
+
+        # Provider name for circuit breaker, rate limiter, etc.
+        self.provider_name = "openai"
         
         # Initialize multi-API key support
         self.api_keys = []
@@ -112,6 +116,94 @@ class OpenAIAdapter(BaseLLM):
             "gpt-3.5-turbo-16k": {"max_tokens": 16384, "context_window": 16385}
         }
 
+    def _is_official_openai_base_url(self) -> bool:
+        """Return True when using the official OpenAI API base URL."""
+        normalized = (self.base_url or "").rstrip("/").lower()
+        return normalized in {
+            "https://api.openai.com/v1",
+            "https://api.openai.com",
+        }
+
+    def _allow_custom_model_on_compatible_gateway(self) -> bool:
+        """
+        Allow custom model names when targeting an OpenAI-compatible gateway.
+
+        Default behavior:
+        - Official OpenAI endpoint -> keep strict model whitelist.
+        - Custom base_url -> allow custom model names unless explicitly disabled.
+        """
+        if self._is_official_openai_base_url():
+            return False
+
+        override = os.getenv("OPENAI_COMPATIBLE_STRICT_MODELS", "").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            return False
+
+        return True
+
+    def _validate_requested_model(self, model: str):
+        """Validate or allow the requested model based on current gateway mode."""
+        if model in self.supported_models:
+            return
+
+        if self._allow_custom_model_on_compatible_gateway():
+            self.logger.warning(
+                "Using custom model '%s' on OpenAI-compatible gateway: %s",
+                model,
+                self.base_url,
+            )
+            return
+
+        error_msg = (
+            f"🚨 Model interception: OpenAI adapter only supports OpenAI series models!\n"
+            f"   Requested model: {model}\n"
+            f"   Supported models: {', '.join(self.supported_models)}\n"
+            f"   ⚠️ Forbidden to call non-OpenAI models (e.g., qwen3-32b) via OpenAI API!"
+        )
+        self.logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    def _normalize_stream_content(self, content: Any) -> str:
+        """Normalize streaming delta content from OpenAI-compatible gateways."""
+        if content is None:
+            return ""
+
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    if item:
+                        parts.append(item)
+                    continue
+
+                if isinstance(item, dict):
+                    text_value = item.get("text")
+                    if isinstance(text_value, str) and text_value:
+                        parts.append(text_value)
+
+            return "".join(parts)
+
+        return ""
+
+    def _extract_message_content(self, message: Dict[str, Any]) -> str:
+        """Extract text content from OpenAI-compatible chat message payloads."""
+        content = self._normalize_stream_content(message.get("content"))
+        if content:
+            return content
+
+        reasoning_content = self._normalize_stream_content(message.get("reasoning_content"))
+        if reasoning_content:
+            return reasoning_content
+
+        refusal = self._normalize_stream_content(message.get("refusal"))
+        if refusal:
+            return refusal
+
+        return ""
+
     def _init_multi_api_keys(self, openai_config: Dict[str, Any]):
         """Initialize multi-API key support"""
         # Add primary API key
@@ -155,22 +247,22 @@ class OpenAIAdapter(BaseLLM):
             # Initialize circuit breaker
             breaker_manager = await get_global_breaker_manager()
             self._circuit_breaker = await breaker_manager.get_breaker(
-                "openai",
+                self.provider_name,
                 CircuitBreakerConfig(
                     failure_threshold=5,
                     recovery_timeout=30.0,
                 )
             )
-            
+
             # Initialize rate limiter
             # OpenAI: 1 key supports 1 concurrent, dynamically set QPS based on key count
             num_keys = len(self.api_keys) if self.api_keys else 1
             # Conservative estimate: 1 QPS per key, with margin for network latency
             base_qps = num_keys * 0.8  # 0.8 QPS per key
-            
+
             limiter_manager = await get_global_limiter_manager()
             self._rate_limiter = await limiter_manager.get_limiter(
-                "openai",
+                self.provider_name,
                 RateLimitConfig(
                     qps=max(base_qps, 5.0),  # Minimum 5 QPS
                     burst=min(num_keys, 10),  # Burst = key count
@@ -179,13 +271,13 @@ class OpenAIAdapter(BaseLLM):
                     max_qps=num_keys * 2.0,  # Maximum = key count * 2
                 )
             )
-            
+
             self.logger.info(f"OpenAI rate limiter config: keys={num_keys}, qps={base_qps:.1f}, burst={min(num_keys, 10)}")
-            
+
             # Initialize retrier
             retry_manager = get_global_retry_manager()
             self._retrier = retry_manager.get_retrier(
-                "openai",
+                self.provider_name,
                 RetryConfig(
                     max_attempts=3,
                     base_delay=1.0,
@@ -232,16 +324,7 @@ class OpenAIAdapter(BaseLLM):
             # Support dynamic model specification via kwargs, critical for dataset-level config
             model = kwargs.get("model", self.config.model_name)
             
-            # 🚨 Strict model validation: intercept non-OpenAI model requests (prevent calling Qwen etc via OpenAI API)
-            if model not in self.supported_models:
-                error_msg = (
-                    f"🚨 Model interception: OpenAI adapter only supports OpenAI series models!\n"
-                    f"   Requested model: {model}\n"
-                    f"   Supported models: {', '.join(self.supported_models)}\n"
-                    f"   ⚠️ Forbidden to call non-OpenAI models (e.g., qwen3-32b) via OpenAI API!"
-                )
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
+            self._validate_requested_model(model)
             
             temperature = kwargs.get("temperature", self.config.temperature)
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
@@ -298,7 +381,8 @@ class OpenAIAdapter(BaseLLM):
             completion_tokens = usage_data.get("completion_tokens", 0)
             total_tokens = usage_data.get("total_tokens", prompt_tokens + completion_tokens)
             
-            content = choice["message"]["content"]
+            message_payload = choice.get("message", {})
+            content = self._extract_message_content(message_payload)
             
             # 3.5 Apply NoFallback policy to validate response
             if self._no_fallback_policy.enabled and self._no_fallback_policy.strict_mode:
@@ -318,7 +402,7 @@ class OpenAIAdapter(BaseLLM):
                 },
                 response_time=response_time,
                 metadata={
-                    "provider": "openai",
+                    "provider": self.provider_name,
                     "api_key_used": api_key[:10] + "...",
                     "resilient": True,
                     "no_fallback": self._no_fallback_policy.enabled if self._no_fallback_policy else False,
@@ -328,7 +412,7 @@ class OpenAIAdapter(BaseLLM):
             
             # 4. Record success metrics
             self._metrics_collector.record(LLMMetrics(
-                provider="openai",
+                provider=self.provider_name,
                 model=result["model"],
                 timestamp=start_time,
                 success=True,
@@ -346,21 +430,21 @@ class OpenAIAdapter(BaseLLM):
             
             # Record failure metrics
             self._metrics_collector.record(LLMMetrics(
-                provider="openai",
+                provider=self.provider_name,
                 model=self.config.model_name,
                 timestamp=start_time,
                 success=False,
                 latency=time.time() - start_time,
                 error=str(e)
             ))
-            
+
             self.logger.error(f"OpenAI chat failed (HTTP {e.status}): {e}", exc_info=True)
             raise
-        
+
         except Exception as e:
             # Record failure metrics
             self._metrics_collector.record(LLMMetrics(
-                provider="openai",
+                provider=self.provider_name,
                 model=self.config.model_name,
                 timestamp=start_time,
                 success=False,
@@ -377,7 +461,7 @@ class OpenAIAdapter(BaseLLM):
         headers = self._get_headers(api_key)
         
         # Use global connection pool session
-        async with self._http_pool.get_session("openai") as session:
+        async with self._http_pool.get_session(self.provider_name) as session:
             async with session.post(
                 url,
                 json=request_data,
@@ -445,7 +529,7 @@ class OpenAIAdapter(BaseLLM):
             usage={"total_tokens": total_tokens},  # Unified format: only includes total_tokens
             response_time=response_time,
             metadata={
-                "provider": "openai",
+                "provider": self.provider_name,
                 "concurrent": True
             }
         )
@@ -463,16 +547,7 @@ class OpenAIAdapter(BaseLLM):
         # Get model
         model = kwargs.get("model", self.config.model_name)
         
-        # 🚨 Strict model validation: intercept non-OpenAI model requests
-        if model not in self.supported_models:
-            error_msg = (
-                f"🚨 Model interception: OpenAI adapter only supports OpenAI series models!\n"
-                f"   Requested model: {model}\n"
-                f"   Supported models: {', '.join(self.supported_models)}\n"
-                f"   ⚠️ Forbidden to call non-OpenAI models (e.g., qwen3-32b) via OpenAI API!"
-            )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
+        self._validate_requested_model(model)
         
         request_data = {
             "model": model,
@@ -497,7 +572,7 @@ class OpenAIAdapter(BaseLLM):
         # Content collection for NoFallback validation
         collected_content = []
         
-        async with self._http_pool.get_session("openai") as session:
+        async with self._http_pool.get_session(self.provider_name) as session:
             async with session.post(
                 url,
                 json=request_data,
@@ -528,9 +603,10 @@ class OpenAIAdapter(BaseLLM):
                             if "choices" in data and len(data["choices"]) > 0:
                                 delta = data["choices"][0].get("delta", {})
                                 if "content" in delta:
-                                    content_chunk = delta["content"]
-                                    collected_content.append(content_chunk)
-                                    yield content_chunk
+                                    content_chunk = self._normalize_stream_content(delta["content"])
+                                    if content_chunk:
+                                        collected_content.append(content_chunk)
+                                        yield content_chunk
                         except json.JSONDecodeError:
                             continue
         
@@ -590,7 +666,7 @@ class OpenAIAdapter(BaseLLM):
             url = f"{self.base_url}/embeddings"
             headers = self._get_headers(api_key)
             
-            async with self._http_pool.get_session("openai") as session:
+            async with self._http_pool.get_session(self.provider_name) as session:
                 async with session.post(
                     url,
                     json=request_data,
@@ -734,7 +810,7 @@ class OpenAIAdapter(BaseLLM):
                     metadata={
                         "error": str(result),
                         "task_index": i,
-                        "provider": "openai",
+                        "provider": self.provider_name,
                         "concurrent": True
                     }
                 )

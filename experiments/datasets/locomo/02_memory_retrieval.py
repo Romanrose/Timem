@@ -1645,7 +1645,7 @@ class MemoryRetrievalTester:
         }
         return error_result
         
-    async def test_with_real_data(self, categories=[1, 2, 3, 4], limit=None, selected_conversations=None, debug_timing=False):
+    async def test_with_real_data(self, categories=[1, 2, 3, 4], limit=None, selected_conversations=None, debug_timing=False, single_conversation_mode=False):
         """
         Test memory retrieval workflow with real data (supports grouped testing)
         
@@ -1653,6 +1653,7 @@ class MemoryRetrievalTester:
             categories: Question categories to test, default [1, 2, 3, 4]
             limit: Max questions per group, None means no limit
             selected_conversations: Select specific conversations to test, None means test all
+            single_conversation_mode: If True, default to a single conversation when no override is provided
         """
         print("🧪 Testing memory retrieval workflow with real data...")
         
@@ -1667,6 +1668,11 @@ class MemoryRetrievalTester:
             filtered_groups = {conv_id: questions for conv_id, questions in self.conversation_groups.items() 
                              if conv_id in selected_conversations}
             self.conversation_groups = filtered_groups
+        elif single_conversation_mode and self.conversation_groups:
+            first_conv_id = next(iter(self.conversation_groups.keys()))
+            self.conversation_groups = {first_conv_id: self.conversation_groups[first_conv_id]}
+            selected_conversations = [first_conv_id]
+            print(f"🎯 Single-conversation mode enabled, defaulting to: {first_conv_id}")
         
         # Count test cases
         total_questions = sum(len(questions) for questions in self.conversation_groups.values())
@@ -2570,7 +2576,14 @@ class MemoryRetrievalTester:
 shutdown_event = None
 tester_instance = None
 
-async def main():
+async def main(
+    selected_conversations=None,
+    test_categories=None,
+    test_limit=None,
+    debug_timing=False,
+    enable_smart_retry=True,
+    single_conversation_mode=False,
+):
     """Main test function - using async context manager and graceful shutdown"""
     global tester_instance, shutdown_event
     
@@ -2582,8 +2595,12 @@ async def main():
     # signal.signal(signal.SIGINT, signal.SIG_DFL) is already the default behavior
     
     print("="*80)
-    print("🚀 TiMem Memory Retrieval Workflow - Multi-conversation User Isolation Test")
-    print("Using all conversations from locomo10_qa_001-004.json, test user group isolation functionality")
+    if single_conversation_mode:
+        print("🚀 TiMem Memory Retrieval Workflow - Single-conversation User Isolation Test")
+        print("Using one conversation from locomo10_qa_001-004.json by default")
+    else:
+        print("🚀 TiMem Memory Retrieval Workflow - Multi-conversation User Isolation Test")
+        print("Using all conversations from locomo10_qa_001-004.json, test user group isolation functionality")
     print("📊 Support grouping tests by conversation, category filtering and quantity limits")
     print("🔒 Ensure only retrieving memories within specified user groups, protecting user privacy")
     print("="*80)
@@ -2591,17 +2608,19 @@ async def main():
     
     try:
         # Configure test parameters - optimize connection pool usage
-        TEST_CATEGORIES = [1,2,3,4]  # Test categories
-        TEST_LIMIT = None # Maximum questions per group, reduced to 2 to quickly verify connection pool fix
-        #SELECTED_CONVERSATIONS = ["conv-26"]  # Only test specified conversation, reduce connection pool pressure
-        SELECTED_CONVERSATIONS = None  # Select specific conversation, set to None to test all conversations
-        DEBUG_TIMING = False  # Enable timing breakdown debugging
-        ENABLE_SMART_RETRY = True  # Enable smart retry mechanism 
+        TEST_CATEGORIES = test_categories or [1,2,3,4]  # Test categories
+        TEST_LIMIT = test_limit  # Maximum questions per group
+        SELECTED_CONVERSATIONS = selected_conversations  # Select specific conversation(s)
+        DEBUG_TIMING = debug_timing  # Enable timing breakdown debugging
+        ENABLE_SMART_RETRY = enable_smart_retry  # Enable smart retry mechanism 
         
         print(f"🔧 Test Configuration:")
         print(f"  Test categories: {TEST_CATEGORIES}")
         print(f"  Per-group limit: {TEST_LIMIT if TEST_LIMIT else 'Unlimited'}")
-        print(f"  Selected conversations: {SELECTED_CONVERSATIONS if SELECTED_CONVERSATIONS else 'All conversations'}")
+        if SELECTED_CONVERSATIONS:
+            print(f"  Selected conversations: {SELECTED_CONVERSATIONS}")
+        else:
+            print(f"  Selected conversations: {'Single conversation (auto-selected)' if single_conversation_mode else 'All conversations'}")
         print(f"  Concurrency mode: Enabled (20 threads batch execution, using 20 API keys)")
         print(f"  API keys: 20 keys auto-rotate load balancing")
         print(f"  Retry mechanism: Enhanced smart retry (max 10 times, tiered wait 1s→10s)")
@@ -2641,7 +2660,8 @@ async def main():
                 categories=TEST_CATEGORIES,
                 limit=TEST_LIMIT,
                 selected_conversations=SELECTED_CONVERSATIONS,
-                debug_timing=DEBUG_TIMING
+                debug_timing=DEBUG_TIMING,
+                single_conversation_mode=single_conversation_mode
             )
             
             if results:

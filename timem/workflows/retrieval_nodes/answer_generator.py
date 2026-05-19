@@ -51,7 +51,7 @@ class AnswerGenerator:
         
         # 🔧 Load QA LLM model configuration (from dataset config)
         self.qa_llm_config = self.qa_prompts.get("qa_llm_config", {})
-        self.qa_model = self.qa_llm_config.get("model", "gpt-4o-mini")  # Default: gpt-4o-mini
+        self.qa_model = self.qa_llm_config.get("model", "mimo-v2-omni")
         self.qa_temperature = self.qa_llm_config.get("temperature", 0.7)
         self.qa_max_tokens = self.qa_llm_config.get("max_tokens", 512)
         
@@ -72,7 +72,9 @@ class AnswerGenerator:
     async def _get_llm_manager(self):
         """Get LLM manager instance"""
         if self.llm_manager is None:
-            self.llm_manager = get_llm()
+            # Use provider from qa_llm_config, fallback to default
+            provider = self.qa_llm_config.get("provider", "mimo")
+            self.llm_manager = get_llm(provider)
         return self.llm_manager
         
     async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:

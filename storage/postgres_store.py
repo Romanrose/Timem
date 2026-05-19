@@ -1248,7 +1248,8 @@ class PostgreSQLStore(UnifiedStorageInterface):
                         }
                         
                         if level in level_table_map:
-                            level_data = {k: v for k, v in record.items() if hasattr(level_table_map[level], k)}
+                            level_fields = {c.name for c in level_table_map[level].__table__.columns}
+                            level_data = {k: v for k, v in record.items() if k in level_fields}
                             
                             # Ensure required fields exist
                             level_data['memory_id'] = memory_id

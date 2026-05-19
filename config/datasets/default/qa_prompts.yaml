@@ -18,8 +18,8 @@
 # LLM Model Configuration
 # LLM model configuration used for answer generation
 qa_llm_config:
-  provider: "openai"  # LLM provider
-  model: "gpt-4o-mini"  # Using gpt-4o-mini for answer generation
+  provider: "mimo"  # LLM provider
+  model: "mimo-v2-omni"  # Using mimo-v2-omni for answer generation
   temperature: 0.7    # Generation temperature
   max_tokens: 2048    # Maximum token count (2048 is sufficient for Non-COT mode)
   top_p: 1.0         # Nucleus sampling

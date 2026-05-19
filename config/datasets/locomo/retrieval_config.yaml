@@ -30,9 +30,9 @@ memory_refiner:
     include_reasoning: true
     show_memory_metadata: true
   prompt_templates:
-    complexity_0: relevance_analysis_simple
-    complexity_1: relevance_analysis_hybrid
-    complexity_2: relevance_analysis_complex
+    complexity_0: memory_refiner_simple
+    complexity_1: memory_refiner_hybrid
+    complexity_2: memory_refiner_complex
   retry:
     fallback_on_error: true
     max_retries: 3

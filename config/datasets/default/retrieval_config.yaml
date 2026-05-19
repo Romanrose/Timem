@@ -5,13 +5,13 @@ answer_generation:
     enabled: false
     fallback_to_single_stage: true
     max_retry_on_parse_error: 3
-    stage1_llm_model: gpt-4o-mini
-    stage2_llm_model: gpt-4o-mini
-    stage3_llm_model: gpt-4o-mini
+    stage1_llm_model: mimo-v2-omni
+    stage2_llm_model: mimo-v2-omni
+    stage3_llm_model: mimo-v2-omni
     timeout_per_stage: 60
   single_cot:
     enabled: true
-    llm_model: gpt-4o-mini
+    llm_model: mimo-v2-omni
     max_retries: 3
     max_tokens: 2048
     retry_prompt_enhancement: true
@@ -23,16 +23,16 @@ memory_refiner:
     fallback_count: 5
     min_original_count: 3
   enabled: true # Enable, only disabled during ablation studies
-  llm_model: gpt-4o-mini
-  llm_provider: openai
+  llm_model: mimo-v2-omni
+  llm_provider: mimo
   max_tokens: 1024
   prompt_config:
     include_reasoning: true
     show_memory_metadata: true
   prompt_templates:
-    complexity_0: relevance_analysis_simple
-    complexity_1: relevance_analysis_hybrid
-    complexity_2: relevance_analysis_complex
+    complexity_0: memory_refiner_simple
+    complexity_1: memory_refiner_hybrid
+    complexity_2: memory_refiner_complex
   retry:
     fallback_on_error: true
     max_retries: 3

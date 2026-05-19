@@ -96,8 +96,8 @@ llm:
         enable_async_timeout: true
         enable_multi_api_keys: true
         enable_rate_limit: false
-      max_concurrent_requests: 20
-      requests_per_minute: 20000
+        max_concurrent_requests: 20
+        requests_per_minute: 20000
       max_retries: 3
       max_tokens: 2048
       model: ${MIMO_MODEL:mimo-v2-omni}
