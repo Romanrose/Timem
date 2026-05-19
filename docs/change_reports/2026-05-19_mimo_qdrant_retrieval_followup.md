@@ -10,6 +10,42 @@ The durable records were:
 
 This file is the formal follow-up report for changes made after that commit.
 
+## Previous submission (`875fa8e`)
+
+Commit:
+
+- `875fa8e` - `Add Mimo provider and fix Locomo retrieval config`
+
+Files changed in that submission:
+
+- `/config/settings.yaml`
+- `/llm/llm_manager.py`
+- `/llm/mimo_adapter.py`
+- `/config/datasets/locomo/qa_prompts.yaml`
+- `/config/datasets/locomo/eval_prompt.yaml`
+- `/config/datasets/locomo/retrieval_config.yaml`
+
+What that submission changed:
+
+- Added `llm.providers.mimo` to the main settings
+- Switched `llm.default_provider` from `openai` to `mimo`
+- Added `MimoAdapter` as a first-class adapter under `/llm/mimo_adapter.py`
+- Added a `mimo` branch to `/llm/llm_manager.py`
+- Switched Locomo QA generation config from `openai / gpt-4o-mini` to
+  `mimo / mimo-v2-omni`
+- Switched Locomo evaluation config from `openai / gpt-4o-mini` to
+  `mimo / mimo-v2-omni`
+- Switched Locomo retrieval config to use `mimo-v2-omni`
+- Changed vector dimension in settings from `2048` to `1024`
+
+Why that submission mattered:
+
+- It established Xiaomi Mimo as a supported runtime provider in the project
+- It aligned the Locomo experiment configs with the intended debug model
+- It fixed the provider/model mismatch that had blocked retrieval and evaluation
+- It corrected the configured vector size so Qdrant could match the actual
+  embedding output dimension
+
 ## Scope
 
 This follow-up focused on making the Locomo debug path reliable enough to run a
