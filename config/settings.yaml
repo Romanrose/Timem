@@ -18,7 +18,7 @@ app:
   version: 1.0.0
   workers: 1
 llm:
-  default_provider: mimo
+  default_provider: openai
   dialogue_system:
     max_retries: 2
     max_tokens: 1024
@@ -107,7 +107,7 @@ llm:
       timeout: 90
     openai:
       api_key: ${OPENAI_API_KEY:}
-      base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      base_url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
       concurrency:
         api_key_rotation: true
         async_retry_count: 20
@@ -121,7 +121,7 @@ llm:
         requests_per_minute: 20000
       max_retries: 3
       max_tokens: 2048
-      model: ${OPENAI_MODEL:mimo-v2-omni}
+      model: ${OPENAI_MODEL:openai/gpt-4o-mini-2024-07-18}
       temperature: 0.7
       test_api_key_1: ${OPENAI_API_KEY:}
       timeout: 90
@@ -244,10 +244,10 @@ llm:
       requests_per_minute: 20000
     max_retries: 3
     max_tokens: 2048
-    model: mimo-v2-omni
-    provider: mimo
+    model: openai/gpt-4o-mini-2024-07-18
+    provider: openai
     temperature: 0.7
-    test_api_key_1: ${MIMO_API_KEY:}
+    test_api_key_1: ${OPENAI_API_KEY:}
     test_api_key_number: 0
     timeout: 90
   timeout: 90

@@ -25,12 +25,51 @@ def _parse_selected_conversations():
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _parse_int_list(env_name: str):
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return None
+    values = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            values.append(int(item))
+        except ValueError:
+            raise ValueError(f"{env_name} must be a comma-separated list of integers, got: {raw}")
+    return values or None
+
+
+def _parse_int(env_name: str):
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be an integer, got: {raw}") from exc
+
+
+def _parse_bool(env_name: str, default: bool = False) -> bool:
+    raw = os.getenv(env_name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 async def main():
     module = importlib.import_module("experiments.datasets.locomo.02_memory_retrieval")
     selected_conversations = _parse_selected_conversations()
+    test_categories = _parse_int_list("TIMEM_TEST_CATEGORIES")
+    test_limit = _parse_int("TIMEM_TEST_LIMIT")
+    debug_timing = _parse_bool("TIMEM_TEST_DEBUG_TIMING", default=False)
 
     await module.main(
         selected_conversations=selected_conversations,
+        test_categories=test_categories,
+        test_limit=test_limit,
+        debug_timing=debug_timing,
         single_conversation_mode=True,
     )
 

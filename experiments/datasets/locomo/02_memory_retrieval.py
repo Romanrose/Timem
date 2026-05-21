@@ -38,7 +38,7 @@ except ImportError as e:
     print(f"💡 Python path: {sys.path[:3]}...")
     sys.exit(1)
 
-
+#收集性能指标 时间分解、token使用、检索到的记忆数量、答案长度和置信度
 class PerformanceMetrics:
     """A collector for performance metrics."""
     

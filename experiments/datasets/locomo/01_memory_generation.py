@@ -100,14 +100,14 @@ logging.getLogger('sqlalchemy').setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 
-
+#并行模拟对话数量
 class ParallelSimConfig:
     """Configuration for parallel simulation."""
     
     def __init__(self, max_concurrent_conversations: int = 10):
         self.max_concurrent_conversations = max_concurrent_conversations
 
-
+#收集和统计模拟过程中的各种指标和日志
 class RealisticSimStats:
     """Statistics for the realistic simulation."""
     
@@ -164,7 +164,7 @@ class RealisticSimStats:
             "total_execution_time": total_time
         }
 
-
+#
 async def register_conversation_users(speakers, conv_id):
     """Register conversation users and experts."""
     try:

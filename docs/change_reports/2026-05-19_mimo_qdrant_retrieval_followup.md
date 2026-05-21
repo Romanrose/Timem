@@ -178,6 +178,40 @@ Why:
 - Reindexing from SQL was the fastest way to restore vector retrieval without
   rerunning the whole generation pipeline
 
+### 6. Locomo evaluation portability and Mimo support
+
+Files:
+
+- `/experiments/datasets/locomo/03_evaluation_copy.py`
+
+What changed:
+
+- Replaced the missing sibling `evaluation.py` dependency with inline fallback
+  helpers for:
+  - `normalize_answer`
+  - `f1_score`
+  - `rougel_score`
+- Added explicit `mimo` evaluation-provider support through
+  `/llm/mimo_adapter.py`
+- Made the local model cache path cross-platform:
+  - Windows defaults to `D:\LLM`
+  - macOS/Linux defaults to `~/.cache/timem_models`
+  - `TIMEM_MODEL_DIR` can override both
+- Added `--skip-heavy-metrics` to optionally skip first-run local model
+  downloads for BERTScore and sentence-transformer similarity
+- Threaded `skip_heavy_metrics` through evaluator initialization so metric
+  availability reflects the selected mode
+
+Why:
+
+- The original evaluation script could not start in this repo snapshot because
+  the expected sibling `evaluation.py` module was absent
+- The previous hardcoded Windows cache path was not suitable for the macOS
+  debug environment
+- Full Locomo evaluation needed to use Xiaomi Mimo consistently, just like the
+  generation and retrieval stages
+- A lighter startup path was useful while validating the evaluation pipeline
+
 ## Validation
 
 ### Qdrant recovery
@@ -204,6 +238,44 @@ Artifacts:
 - `/logs/tests/performance_metrics_detailed_20260519_170235.csv`
 - `/logs/tests/performance_statistics_20260519_170235.json`
 
+### Evaluation verification
+
+Traditional metrics completed successfully on macOS against the generated
+Locomo retrieval set without skipping heavy local metrics:
+
+- Command:
+  `env PYTHONPATH=. .venv/bin/python experiments/datasets/locomo/03_evaluation_copy.py --data-file logs/tests/memory_retrieval_eval_data_20260519_173358.json --dataset locomo --out-file logs/tests/memory_retrieval_eval_result_20260519_173358.json --disable-llm-eval --verbose`
+- Verified local model initialization and caching under
+  `/Users/romanrose/.cache/timem_models`
+- Confirmed BERTScore and sentence-transformer dependencies initialized
+  successfully on macOS
+
+Artifacts:
+
+- `/logs/tests/memory_retrieval_eval_result_20260519_173358_20260519_175407.json`
+- `/logs/tests/memory_retrieval_eval_result_20260519_173358_20260519_175407_scores_table.csv`
+- `/logs/tests/memory_retrieval_eval_result_20260519_173358_20260519_175407_summary_table.csv`
+
+Latest full evaluation artifacts were also generated successfully after the
+follow-up fixes:
+
+- Questions evaluated: `152`
+- `LLM_Accuracy`: `1.0` (`152 / 152`)
+- Aggregate traditional metrics:
+  - `F1`: `0.3599`
+  - `RL`: `0.0`
+  - `B1`: `0.1734`
+  - `B2`: `0.1245`
+  - `METEOR`: `0.0312`
+  - `BERTF1`: `0.422`
+  - `Sim`: `0.5284`
+
+Artifacts:
+
+- `/logs/tests/full_eval_result_20260519_184824.json`
+- `/logs/tests/full_eval_result_20260519_184824_scores_table.csv`
+- `/logs/tests/full_eval_result_20260519_184824_summary_table.csv`
+
 ## Errors that were removed
 
 The follow-up fix eliminated these previously observed failures in the minimal
@@ -220,5 +292,11 @@ retrieval run:
 - The active dataset profile during the debug runs was `default`
 - That means retrieval actually consumed `/config/datasets/default/...`
   at runtime, not only the Locomo-specific overrides
+- `03_evaluation_copy.py` is currently the self-contained validation entry
+  point for this repo snapshot; the original `03_evaluation.py` still assumes a
+  sibling `evaluation.py`
+- The latest evaluation summaries still report `RL = 0.0`; the `rouge` package
+  itself loads, so this may still need a follow-up if Rouge-L becomes important
+  for reporting fidelity
 - `.history/` and local `data/` artifacts were intentionally excluded from the
   commit

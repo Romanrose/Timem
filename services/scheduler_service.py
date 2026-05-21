@@ -23,6 +23,15 @@ from services.session_memory_scanner import (
 logger = get_logger(__name__)
 
 
+def _safe_job_next_run_time(job) -> Optional[datetime]:
+    """Return next_run_time when APScheduler has materialized it, else None."""
+    try:
+        return getattr(job, "next_run_time", None)
+    except AttributeError:
+        # APScheduler 3.11 may not expose next_run_time before the scheduler starts.
+        return None
+
+
 class SchedulerService:
     """
     Scheduled Task Scheduling Service
@@ -60,7 +69,7 @@ class SchedulerService:
         if self.backfill_service.enabled:
             schedule_time = self.backfill_service.config.get("schedule", "0 2 * * *")
             
-            self.scheduler.add_job(
+            job = self.scheduler.add_job(
                 self._run_daily_backfill,
                 trigger=CronTrigger.from_crontab(schedule_time),
                 id="daily_memory_backfill",
@@ -70,7 +79,11 @@ class SchedulerService:
             )
             
             logger.info(f" Added daily backfill task: {schedule_time}")
-            logger.info(f"   Next execution time: {self.scheduler.get_job('daily_memory_backfill').next_run_time}")
+            next_run_time = _safe_job_next_run_time(job)
+            logger.info(
+                "   Next execution time: %s",
+                next_run_time.isoformat() if next_run_time else "pending scheduler start",
+            )
         else:
             logger.warning(" Scheduled backfill is disabled, skipping task registration")
         
@@ -108,7 +121,13 @@ class SchedulerService:
             if jobs:
                 logger.info(f" Registered tasks: {len(jobs)}")
                 for job in jobs:
-                    logger.info(f"   - {job.name} (ID: {job.id}), Next run: {job.next_run_time}")
+                    next_run_time = _safe_job_next_run_time(job)
+                    logger.info(
+                        "   - %s (ID: %s), Next run: %s",
+                        job.name,
+                        job.id,
+                        next_run_time.isoformat() if next_run_time else "pending scheduler start",
+                    )
             else:
                 logger.warning(" No registered tasks found")
     
@@ -229,7 +248,11 @@ class SchedulerService:
                 {
                     "id": job.id,
                     "name": job.name,
-                    "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+                    "next_run_time": (
+                        _safe_job_next_run_time(job).isoformat()
+                        if _safe_job_next_run_time(job)
+                        else None
+                    ),
                     "pending": job.pending
                 }
                 for job in self.scheduler.get_jobs()
@@ -262,4 +285,3 @@ async def cleanup_scheduler_service():
     if _scheduler_service is not None:
         await _scheduler_service.shutdown()
         _scheduler_service = None
-

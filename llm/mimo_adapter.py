@@ -41,8 +41,20 @@ class MimoAdapter(OpenAIAdapter):
         self.api_keys = []
         self._current_key_index = 0
         self._init_multi_api_keys(mimo_config)
+
+        # Override supported models to include Mimo models
+        self.supported_models = [
+            "mimo-v2-omni",
+            "mimo-v2-flash",
+            "mimo-v2-pro",
+        ]
+
         self.logger.info(
             "Initializing Mimo adapter: base_url=%s, model=%s",
             self.base_url,
             self.config.model_name,
         )
+
+    def _allow_custom_model_on_compatible_gateway(self) -> bool:
+        """Mimo adapter always allows custom model names."""
+        return True

@@ -9,13 +9,13 @@
 # LLM Evaluation Model Configuration
 # LLM model used for Locomo evaluation
 eval_llm_config:
-  provider: "mimo"  # LLM provider
-  model: "mimo-v2-omni"  # Using mimo-v2-omni for evaluation
-  temperature: 0.7    # Evaluation temperature set to 0.7
-  max_tokens: 10      # Evaluation only needs simple yes/no response
-  
+  provider: "mimo" # LLM provider
+  model: "mimo-v2-omni" # Using mimo-v2-omni for evaluation
+  temperature: 0.7 # Evaluation temperature set to 0.7
+  max_tokens: 512 # Real prompts need extra room for Mimo reasoning tokens plus final JSON label
+
 # Backward compatibility fields
-eval_model: "mimo-v2-omni"  # For backward compatibility with legacy code
+eval_model: "mimo-v2-omni" # For backward compatibility with legacy code
 
 # Question-answering evaluation prompt
 qa_evaluation_prompt: |
@@ -38,7 +38,9 @@ qa_evaluation_prompt: |
   Gold answer: {standard_answer}
   Generated answer: {generated_answer}
 
-  First, provide a short (one sentence) explanation of your reasoning, then finish with CORRECT or WRONG.
-  Do NOT include both CORRECT and WRONG in your response, or it will break the evaluation script.
+  Return only a compact JSON object in exactly this format:
+  {{"label":"CORRECT"}}
+  or
+  {{"label":"WRONG"}}
 
-  Just return the label CORRECT or WRONG in a json format with the key as "label".
+  Do not include explanations, markdown, or any text outside the JSON object.

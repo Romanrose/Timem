@@ -72,15 +72,63 @@ import yaml
 import asyncio
 from dataclasses import dataclass
 
-# Import evaluation modules - directly use original framework implementation
-import sys
-import os
-sys.path.insert(0, os.path.dirname(__file__))
-import importlib
-evaluation = importlib.import_module('evaluation')
-f1_score = evaluation.f1_score
-rougel_score = evaluation.rougel_score
-normalize_answer = evaluation.normalize_answer
+# Local fallback evaluation helpers.
+# The original script expected a sibling `evaluation.py`, but that file is not
+# present in this repo snapshot, so we provide the required helpers inline.
+import re
+import string
+from collections import Counter as TokenCounter
+
+
+def normalize_answer(text):
+    """Lower text and remove punctuation, articles and extra whitespace."""
+    if text is None:
+        return ""
+
+    text = safe_str(text) if 'safe_str' in globals() else str(text)
+    text = text.lower()
+    text = "".join(ch for ch in text if ch not in string.punctuation)
+    text = re.sub(r"\b(a|an|the)\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def f1_score(prediction, reference):
+    """Token-level F1 compatible with standard QA evaluation."""
+    pred_tokens = normalize_answer(prediction).split()
+    ref_tokens = normalize_answer(reference).split()
+
+    if not pred_tokens and not ref_tokens:
+        return 1.0
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+
+    common = TokenCounter(pred_tokens) & TokenCounter(ref_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0.0
+
+    precision = num_same / len(pred_tokens)
+    recall = num_same / len(ref_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
+def rougel_score(prediction, reference):
+    """Rouge-L F1 with a safe fallback when `rouge` is unavailable."""
+    pred = normalize_answer(prediction)
+    ref = normalize_answer(reference)
+    if not pred and not ref:
+        return 1.0
+    if not pred or not ref:
+        return 0.0
+
+    try:
+        from rouge import Rouge
+        rouge = Rouge()
+        score = rouge.get_scores(pred, ref, avg=True)
+        return max(0.0, min(1.0, score['rouge-l']['f']))
+    except Exception:
+        return f1_score(pred, ref)
 
 # Import BERTScore related modules for batch processing
 try:
@@ -94,13 +142,47 @@ except ImportError:
 try:
     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
     from nltk.translate.meteor_score import meteor_score as nltk_meteor_score
+    import nltk
     NLTK_AVAILABLE = True
 except ImportError:
     print("⚠️ Warning: NLTK metrics not available, BLEU and METEOR will be disabled")
     NLTK_AVAILABLE = False
+    nltk = None
 
 # BERTScore-F1 uses batch processing optimization
 BERTSCORE_AVAILABLE = BERT_SCORE_BATCH_AVAILABLE
+
+
+def _has_nltk_resource(resource_path: str) -> bool:
+    """Return whether an NLTK runtime resource is available locally."""
+    if not NLTK_AVAILABLE or nltk is None:
+        return False
+
+    try:
+        nltk.data.find(resource_path)
+        return True
+    except LookupError:
+        return False
+    except Exception:
+        return False
+
+
+METEOR_REQUIRED_RESOURCES = [
+    "corpora/wordnet",
+    "corpora/omw-1.4",
+]
+METEOR_AVAILABLE = NLTK_AVAILABLE and all(
+    _has_nltk_resource(resource) for resource in METEOR_REQUIRED_RESOURCES
+)
+if NLTK_AVAILABLE and not METEOR_AVAILABLE:
+    missing_resources = [
+        resource for resource in METEOR_REQUIRED_RESOURCES
+        if not _has_nltk_resource(resource)
+    ]
+    print(
+        "⚠️ Warning: NLTK METEOR resources unavailable, METEOR will be disabled: "
+        + ", ".join(missing_resources)
+    )
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -114,6 +196,7 @@ except ImportError:
 from llm.zhipuai_adapter import ZhipuAIAdapter
 from llm.openai_adapter import OpenAIAdapter
 from llm.qwen_adapter import QwenAdapter
+from llm.mimo_adapter import MimoAdapter
 from llm.base_llm import Message, MessageRole, ModelConfig
 from timem.utils.config_manager import get_llm_config
 try:
@@ -203,8 +286,17 @@ def safe_normalize_text(text):
     except Exception:
         return ""
 
-# BERT model configuration - use model consistent with original framework
-BERT_MODEL_DIR = "D:\\LLM"
+# BERT/model cache directory - use a platform-appropriate default.
+def _default_model_dir() -> str:
+    env_override = os.getenv("TIMEM_MODEL_DIR", "").strip()
+    if env_override:
+        return env_override
+    if sys.platform.startswith("win"):
+        return "D:\\LLM"
+    return str(Path.home() / ".cache" / "timem_models")
+
+
+BERT_MODEL_DIR = _default_model_dir()
 BERT_SCORE_MODEL = "bert-base-uncased"  # Use standard BERT model, consistent with original framework
 
 # CUDA configuration
@@ -639,7 +731,7 @@ def load_eval_prompt(dataset_name: str = None):
         return None, {}
 
 def ensure_model_directory():
-    """Ensure D:\\LLM directory exists and set environment variables"""
+    """Ensure model cache directory exists and set environment variables."""
     print(f"🔧 Ensuring model directory exists: {BERT_MODEL_DIR}")
     
     # Create main model directory
@@ -734,6 +826,8 @@ def parse_args():
                        help='BERT model directory path')
     parser.add_argument('--batch-size', type=int, default=BATCH_SIZE,
                        help='Batch evaluation size (default 32)')
+    parser.add_argument('--skip-heavy-metrics', action='store_true',
+                       help='Skip heavy local model metrics (BERTScore and Sim) to avoid first-run model downloads')
     parser.add_argument('--no-cuda', action='store_true',
                        help='Disable CUDA, force CPU usage')
     parser.add_argument('--auto-latest', action='store_true',
@@ -750,6 +844,12 @@ def parse_args():
                        help='Limit evaluation sample count (0 means all, >0 means limit)')
     parser.add_argument('--num-runs', type=int, default=1,
                        help='Number of LLM evaluation repetitions (default 1)')
+    parser.add_argument('--max-concurrent-llm', type=int, default=50,
+                       help='Maximum concurrent LLM evaluation requests (default 50)')
+    parser.add_argument('--llm-batch-delay', type=float, default=0.5,
+                       help='Delay between LLM evaluation batches in seconds (default 0.5)')
+    parser.add_argument('--llm-timeout', type=float, default=30.0,
+                       help='Timeout for a single LLM evaluation request in seconds (default 30.0)')
     args = parser.parse_args()
     
     # Default enable auto-find latest file
@@ -782,13 +882,15 @@ def parse_args():
 class TimemQAEvaluator:
     """TiMem QA Evaluator - supports async context management"""
     
-    def __init__(self, model_name: str = "timem-memory-retrieval", verbose: bool = False, 
-                 use_cuda: bool = True, batch_size: int = BATCH_SIZE, 
+    def __init__(self, model_name: str = "timem-memory-retrieval", verbose: bool = False,
+                 use_cuda: bool = True, batch_size: int = BATCH_SIZE,
+                 skip_heavy_metrics: bool = False,
                  concurrent_config: ConcurrentEvalConfig = None):
         self.model_name = model_name
         self.verbose = verbose
         self.use_cuda = use_cuda and torch.cuda.is_available()
         self.batch_size = batch_size
+        self.skip_heavy_metrics = skip_heavy_metrics
         self.device = torch.device('cuda' if self.use_cuda else 'cpu')
         
         # Concurrent configuration
@@ -829,12 +931,15 @@ class TimemQAEvaluator:
                 'rouge_l_score': True,
                 'bleu_1': NLTK_AVAILABLE,  # BLEU-1
                 'bleu_2': NLTK_AVAILABLE,  # BLEU-2
-                'meteor': NLTK_AVAILABLE,  # METEOR
-                'bertscore_f1': BERTSCORE_AVAILABLE,  # BERTScore-F1
-                'sim': SENTENCE_TRANSFORMER_AVAILABLE,  # Semantic similarity
+                'meteor': METEOR_AVAILABLE,  # METEOR
+                'bertscore_f1': BERTSCORE_AVAILABLE and not self.skip_heavy_metrics,  # BERTScore-F1
+                'sim': SENTENCE_TRANSFORMER_AVAILABLE and not self.skip_heavy_metrics,  # Semantic similarity
                 'exact_match': False,  # Temporarily disabled
                 'recall': False        # Temporarily disabled
             }
+
+        if self.skip_heavy_metrics:
+            print("⚡ Heavy local metrics disabled: BERTScore + Sim")
         
         # Initialize Sentence Transformer model for semantic similarity calculation
         self.sim_model = None
@@ -1096,30 +1201,34 @@ class TimemQAEvaluator:
                 print(f"📝 Max tokens: {eval_max_tokens}")
                 return True
                 
-            elif provider == 'openai' or self.concurrent_config.use_openai:
-                print(f"🤖 Initializing OpenAI model for questions 1-4 evaluation...")
+            elif provider == 'openai' or provider == 'mimo' or self.concurrent_config.use_openai:
+                print(f"🤖 Initializing {provider.upper()} model for questions 1-4 evaluation...")
                 print(f"   Model: {model}")
-                
+
                 # Set OpenAI-related environment variables
                 os.environ['OPENAI_CACHE_DIR'] = os.path.join(BERT_MODEL_DIR, "openai_cache")
-                
-                # Create OpenAI adapter configuration
+
+                # Create adapter configuration
                 eval_temperature = llm_config.get('temperature', 0.7)
                 eval_max_tokens = llm_config.get('max_tokens', 2048)
-                
+
                 model_config = ModelConfig(
                     model_name=model,
                     temperature=eval_temperature,
                     max_tokens=eval_max_tokens
                 )
-                
-                self.openai_adapter = OpenAIAdapter(model_config)
+
+                # Use appropriate adapter based on provider
+                if provider == 'mimo':
+                    self.openai_adapter = MimoAdapter(model_config)
+                else:
+                    self.openai_adapter = OpenAIAdapter(model_config)
                 self.eval_llm_adapter = self.openai_adapter
-                self.eval_llm_provider = 'openai'
+                self.eval_llm_provider = provider
                 self.eval_temperature = eval_temperature
                 self.eval_max_tokens = eval_max_tokens
-                    
-                print("✅ OpenAI model initialized successfully")
+
+                print(f"✅ {provider.upper()} model initialized successfully")
                 print(f"📂 Model cache directory: {os.path.join(BERT_MODEL_DIR, 'openai_cache')}")
                 print(f"🌡️  Evaluation temperature: {eval_temperature}")
                 print(f"📝 Max tokens: {eval_max_tokens}")
@@ -1206,34 +1315,26 @@ class TimemQAEvaluator:
                         timeout=self.concurrent_config.timeout
                     )
                     
-                    # Parse LLM response
+                    # Parse LLM response strictly to avoid reasoning text
+                    # like "I should output CORRECT/WRONG" being misread as a label.
                     response_text = response.content.strip()
-                    
-                    # Try to parse JSON format response
+                    label = 'UNKNOWN'
+
                     try:
-                        # Find JSON part
                         import re
-                        json_match = re.search(r'\{[^}]*"label"[^}]*\}', response_text)
+                        json_match = re.search(r'\{[^{}]*"label"\s*:\s*"[^"]+"[^{}]*\}', response_text)
                         if json_match:
-                            json_str = json_match.group(0)
-                            result = json.loads(json_str)
-                            label = result.get('label', '').upper()
-                        else:
-                            # If no JSON found, try direct match CORRECT/WRONG
-                            if 'CORRECT' in response_text.upper():
-                                label = 'CORRECT'
-                            elif 'WRONG' in response_text.upper():
-                                label = 'WRONG'
-                            else:
-                                label = 'UNKNOWN'
-                    except:
-                        # If JSON parsing fails, try direct match
-                        if 'CORRECT' in response_text.upper():
-                            label = 'CORRECT'
-                        elif 'WRONG' in response_text.upper():
-                            label = 'WRONG'
-                        else:
-                            label = 'UNKNOWN'
+                            result = json.loads(json_match.group(0))
+                            candidate = str(result.get('label', '')).strip().upper()
+                            if candidate in {'CORRECT', 'WRONG'}:
+                                label = candidate
+                    except Exception:
+                        label = 'UNKNOWN'
+
+                    if label == 'UNKNOWN':
+                        direct_match = response_text.strip().strip('"').strip("'").upper()
+                        if direct_match in {'CORRECT', 'WRONG'}:
+                            label = direct_match
                     
                     is_correct = (label == 'CORRECT')
                     
@@ -1631,18 +1732,9 @@ class TimemQAEvaluator:
         if self.supported_metrics['rouge_l_score']:
             print("  ⚡ Rouge-L...")
             try:
-                from rouge import Rouge
-                rouge = Rouge()
-                valid_pairs = [(i, ' '.join(pred_tokens_stemmed[i]), ' '.join(ref_tokens_stemmed[i])) 
-                              for i in range(n) if pred_tokens_stemmed[i] and ref_tokens_stemmed[i]]
-                if valid_pairs:
-                    indices, pred_strs, ref_strs = zip(*valid_pairs)
-                    try:
-                        rouge_scores = rouge.get_scores(list(pred_strs), list(ref_strs))
-                        for idx, score_dict in zip(indices, rouge_scores):
-                            results[idx]['rouge_l_score'] = min(1.0, score_dict['rouge-l']['f'])
-                    except:
-                        pass
+                rouge_scores = self._batch_calculate_rougel(predictions, references)
+                for idx, score in enumerate(rouge_scores):
+                    results[idx]['rouge_l_score'] = score
             except Exception as e:
                 print(f"    ⚠️ Rouge-L failed: {e}")
         
@@ -2620,7 +2712,7 @@ class TimemQAEvaluator:
                             print(f"    {metric_name}: {metric_stats['mean']:.4f}")
         
         # Display LLM evaluation results for categories 1-4 questions
-        if 'categories_1_4_llm_evaluation' in result['statistics']:
+        if self.concurrent_config.enable_llm_evaluation and 'categories_1_4_llm_evaluation' in result['statistics']:
             categories_1_4_stats = result['statistics']['categories_1_4_llm_evaluation']
             if categories_1_4_stats['total_questions'] > 0:
                 llm_name = "OpenAI" if self.concurrent_config.use_openai else "GLM-4-flash"
@@ -3117,9 +3209,12 @@ async def main():
         print(f"\n🔧 Setting up BERT environment...")
         setup_bert_environment()
         
-        print(f"\n📥 Checking BERT Score model...")
-        if not download_bert_score_model():
-            print("⚠️ BERT Score model not available, will skip BERT Score evaluation")
+        if args.skip_heavy_metrics:
+            print(f"\n⏭️ Skipping heavy metric model initialization (BERTScore + Sim)")
+        else:
+            print(f"\n📥 Checking BERT Score model...")
+            if not download_bert_score_model():
+                print("⚠️ BERT Score model not available, will skip BERT Score evaluation")
         
         # Load evaluation data
         print(f"\n📚 Loading evaluation data...")
@@ -3137,11 +3232,11 @@ async def main():
         # 💡 Quick disable LLM evaluation: use --disable-llm-eval parameter or modify enable_llm_evaluation=False below
         # 💡 Enable LLM evaluation only: use --llm-only parameter or modify llm_only=True below
         concurrent_config = ConcurrentEvalConfig(
-            max_concurrent_requests=50,
-            batch_delay=0.5,
+            max_concurrent_requests=args.max_concurrent_llm,
+            batch_delay=args.llm_batch_delay,
             max_retries=20,
             retry_delays=[1.0, 2.0, 3.0],
-            timeout=30.0,
+            timeout=args.llm_timeout,
             use_openai=not args.use_glm,  # Default to OpenAI, unless --use-glm is specified
             openai_provider="openai",
             enable_llm_evaluation=not args.disable_llm_eval,  # Default enable LLM evaluation, use --disable-llm-eval to disable
@@ -3164,6 +3259,7 @@ async def main():
             verbose=args.verbose,
             use_cuda=cuda_available,
             batch_size=args.batch_size,
+            skip_heavy_metrics=args.skip_heavy_metrics,
             concurrent_config=concurrent_config
         ) as evaluator:
             
@@ -3175,12 +3271,11 @@ async def main():
                 return
             
             # Initialize LLM model (pass dataset name to load corresponding config)
-            llm_name = "OpenAI" if concurrent_config.use_openai else "GLM-4-flash"
-            print(f"\n🤖 Initializing {llm_name} model...")
+            print(f"\n🤖 Initializing evaluation LLM...")
             if args.dataset:
                 print(f"📋 Dataset: {args.dataset}")
             if not evaluator.initialize_llm_evaluator(dataset_name=args.dataset):
-                print(f"⚠️ {llm_name} model initialization failed, evaluation of categories 1-4 questions will be skipped")
+                print("⚠️ Evaluation LLM initialization failed, categories 1-4 LLM scoring will be skipped")
             
             # Enable disabled metrics
             if args.enable_exact_match:
@@ -3281,25 +3376,30 @@ async def main():
                 print(f"✅ Statistics summary saved to: {summary_file}")
             
             # Display final statistics (using statistics from last run)
-            print(f"\n🚀 {llm_name} concurrent evaluation final statistics:")
-            print(f"  Total {llm_name} evaluations: {evaluator.concurrent_stats['total_glm_evaluations']}")
-            print(f"  Successful {llm_name} evaluations: {evaluator.concurrent_stats['successful_glm_evaluations']}")
-            print(f"  Failed {llm_name} evaluations: {evaluator.concurrent_stats['failed_glm_evaluations']}")
-            print(f"  Total retries: {evaluator.concurrent_stats['total_retries']}")
-            
-            if evaluator.concurrent_stats['total_glm_evaluations'] > 0:
-                success_rate = (evaluator.concurrent_stats['successful_glm_evaluations'] / 
-                               evaluator.concurrent_stats['total_glm_evaluations']) * 100
-                print(f"  {llm_name} evaluation success rate: {success_rate:.1f}%")
+            if concurrent_config.enable_llm_evaluation:
+                llm_name = (getattr(evaluator, 'eval_llm_provider', None) or ('openai' if concurrent_config.use_openai else 'glm')).upper()
+                print(f"\n🚀 {llm_name} concurrent evaluation final statistics:")
+                print(f"  Total {llm_name} evaluations: {evaluator.concurrent_stats['total_glm_evaluations']}")
+                print(f"  Successful {llm_name} evaluations: {evaluator.concurrent_stats['successful_glm_evaluations']}")
+                print(f"  Failed {llm_name} evaluations: {evaluator.concurrent_stats['failed_glm_evaluations']}")
+                print(f"  Total retries: {evaluator.concurrent_stats['total_retries']}")
+
+                if evaluator.concurrent_stats['total_glm_evaluations'] > 0:
+                    success_rate = (evaluator.concurrent_stats['successful_glm_evaluations'] /
+                                   evaluator.concurrent_stats['total_glm_evaluations']) * 100
+                    print(f"  {llm_name} evaluation success rate: {success_rate:.1f}%")
+            else:
+                print("\n🚀 LLM evaluation final statistics: disabled for this run")
             
             print(f"\n🎉 Evaluation completed!")
             print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            llm_display_name = (getattr(evaluator, 'eval_llm_provider', None) or ('openai' if concurrent_config.use_openai else 'glm')).upper()
             print(f"\n💡 Concurrency features:")
-            print(f"  ✅ 50 {llm_name} threads executing simultaneously, supporting true async concurrency")
+            print(f"  ✅ 50 {llm_display_name} threads executing simultaneously, supporting true async concurrency")
             print(f"  ✅ Smart retry mechanism: tiered wait 1s → 2s → 3s")
             print(f"  ✅ Rate limiting: completely removed, no wait time")
             print(f"  ✅ Batch delay to avoid excessive pressure")
-            print(f"  ✅ Detailed {llm_name} evaluation statistics and monitoring")
+            print(f"  ✅ Detailed {llm_display_name} evaluation statistics and monitoring")
             print(f"  ✅ Timeout mechanism protection to avoid long waits")
             print(f"  ✅ Async context manager ensures proper resource cleanup")
             
